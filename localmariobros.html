@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mario z Pegazem - Retro Platformówka</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #202020;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: 'Courier New', monospace;
+    }
+    #game-container {
+      position: relative;
+      border: 8px solid #4b0082;
+    }
+    canvas {
+      display: block;
+      background-color: #5c94fc; /* klasyczne niebo NES */
+    }
+  </style>
+</head>
+<body>
+
+<div id="game-container">
+  <canvas id="gameCanvas" width="800" height="450"></canvas>
+</div>
+
+<script>
+/* -------------------------
+   🌟 INICJALIZACJA
+   ------------------------- */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Konfiguracja gry
+const GAME_STATE_START = 0;
+const GAME_STATE_PLAYING = 1;
+const GAME_STATE_OVER = 2;
+
+let gameState = {
+  state: GAME_STATE_START,
+  score: 0,
+  lives: 3,
+  cameraX: 0,
+  running: false
+};
+
+const FPS = 60;
+let lastTime = 0;
+
+// Inputy
+const keys = {
+  right: false,
+  left: false,
+  jump: false,
+  jumpHeld: false
+};
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') {
+    keys.jump = true;
+    keys.jumpHeld = true;
+
+    if (gameState.state === GAME_STATE_START) {
+      startGame();
+    } else if (gameState.state === GAME_STATE_OVER) {
+      resetGame();
+    }
+  }
+
+  if (e.code === 'ArrowRight') keys.right = true;
+  if (e.code === 'ArrowLeft') keys.left = true;
+});
+
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space') keys.jumpHeld = false;
+  if (e.code === 'ArrowRight') keys.right = false;
+  if (e.code === 'ArrowLeft') keys.left = false;
+});
+
+/* -------------------------
+   🎵 DŹWIĘKI (Simple ChipTune)
+   ------------------------- */
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playTone(freq, type, duration) {
+  const osc = audioCtx.createOscillator();
+  const gainNode = audioCtx.createGain();
+
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+
+  osc.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration);
+}
+
+const sfx = {
+  jump: () => playTone(350, 'square', 0.15),
+  coin: () => {
+    playTone(987.77, 'square', 0.1); // B5
+    setTimeout(() => playTone(1318.5, 'square', 0.1), 60); // E6
+  },
+  stomp: () => playTone(150, 'sawtooth', 0.12),
+  gameover: () => {
+    [440, 370, 311, 261].forEach((f, i) => setTimeout(() => playTone(f, 'triangle', 0.3), i * 150));
+  },
+  music: () => {
+    // Prosty melodyczny fragment (startowy motyw)
+    let time = audioCtx.currentTime;
+    const notes = [392, 493, 587, 659, 784, 988, 784, 659]; // G major
+    notes.forEach((note, i) => {
+      const osc = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = note;
+      gainNode.gain.setValueAtTime(0.1, time);
+      gainNode.gain.linearRampToValueAtTime(0, time + 0.25);
+      osc.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      osc.start(time);
+      osc.stop(time + 0.25);
+      time += 0.25;
+    });
+  }
+};
+
+/* -------------------------
+   🦄 KLASY I OBIEKTY
+   ------------------------- */
+class Platform {
+  constructor(x, y, width, height, type) {
+    this.x = x;
+    this.y = y;
+    this.w = width;
+    this.h = height;
+    this.type = type; // 'brick', 'ground', 'pipe'
+  }
+
+  draw(ctx) {
+    ctx.fillStyle = '#b7382e'; // czerwony
+    if (this.type === 'ground') ctx.fillStyle = '#754c28';
+    else if (this.type === 'pipe') ctx.fillStyle = '#368b2d';
+    else if (this.type === 'brick') ctx.fillStyle = '#c54b1d';
+
+    // Rysowanie "cegły"
+    const tileSize = 32;
+    const rows = Math.ceil(this.h / tileSize);
+    const cols = Math.ceil(this.w / tileSize);
+
+    for (let r = 0; r < rows; ++r) {
+      for (let c = 0; c < cols; ++c) {
+        ctx.fillRect(
+          this.x + c * tileSize,
+          this.y + r * tileSize,
+          tileSize - 2, // mały odstęp
+          tileSize - 4
+        );
+      }
+    }
+
+    if (this.type === 'brick') {
+      // Wierszowanie cegieł
+      ctx.fillStyle = '#000';
+      for (let r = 0; r < rows; ++r) {
+        for (let c = 0; c <= cols; ++c) {
+          if (r % 2 === 0 && c > 0) ctx.fillRect(this.x + c * tileSize - 2, this.y + r * tileSize, 4, tileSize);
+        }
+      }
+    } else if (this.type === 'pipe') {
+      // Rura z efektem cieniowania
+      const w = this.w;
+      ctx.fillRect(this.x, this.y, w, this.h);
+      // "Obwódka" rury
+      ctx.fillStyle = '#235e1d';
+      ctx.fillRect(this.x + w - 6, this.y, 6, this.h);
+      // Góra rury
+      ctx.fillStyle = '#368b2d';
+      ctx.fillRect(this.x - 4, this.y - 20, w + 8, 20);
+    }
+  }
+}
+
+class Mario {
+  constructor() {
+    this.x = 100;
+    this.y = canvas.height - 250;
+    this.w = 32;
+    this.h = 48;
+    this.vx = 0;
+    this.vy = 0;
+    this.speed = 4.5;
+    this.jumpForce = -12; // siła skoku
+    this.gravity = 0.6;
+    this.grounded = false;
+    this.isFlying = false; // PEGASUS MODE!
+    this.fuel = 30;
+  }
+
+  update(platforms, enemies) {
+    // Ruch
+    if (keys.left) this.vx = -this.speed;
+    else if (keys.right) this.vx = this.speed;
+    else this.vx *= 0.7; // Tarcie
+
+    // Skok i "lot Pegazem"
+    if (keys.jump && this.grounded) {
+      this.vy = this.jumpForce;
+      this.grounded = false;
+      sfx.jump();
+    }
+
+    // Jeśli w powietrzu → możliwe skakanie (double jump) lub lot
+    if (!this.grounded && keys.jumpHeld && this.fuel > 0) {
+      this.vy += -4.5; // dodatkowy pęd do góry
+      this.fuel--;
+      this.isFlying = true;
+    } else if (this.grounded) {
+      this.fuel = 30; // Odnawiamy paliwo
+      this.isFlying = false;
+    }
+
+    if (!this.grounded && !keys.jumpHeld) this.fuel = Math.min(this.fuel + 1, 30); // mały regen
+
+    this.vy += this.gravity;
+    this.x += this.vx;
+    this.y += this.vy;
+
+    // Kolizje z podłogą i platformami
+    this.grounded = false;
+
+    for (let p of platforms) {
+      // Przepuszczenie przez góry, jeśli skaczemy w dół
+      if (this.vy > 0 &&
+          this.x < p.x + p.w &&
+          this.x + this.w > p.x &&
+          this.y + this.h >= p.y &&
+          this.y + this.h <= p.y + 20) {
+        this.y = p.y - this.h;
+        this.vy = 0;
+        this.grounded = true;
+
+        // Ochrona przed przeskakiwaniem cegły
+        if (this.x + this.w < p.x + 4 || this.x > p.x + p.w - 4) {
+          // To jest przypadek "kolizji bocznej", nie ustawiamy grounded
+          this.y = p.y - this.h; // ale zatrzymujemy
+        }
+      } else if (
+        this.vy < 0 &&
+        this.x < p.x + p.w &&
+        this.x + this.w > p.x &&
+        this.y <= p.y + p.h &&
+        this.y >= p.y + p.h - 20
+      ) {
+        // Wbić w cegłę z dołu (przydaje się później)
+      }
+
+      // Kolizja boczna
+      if (
+        this.y + this.h > p.y &&
+        this.y < p.y + p.h &&
+        this.x < p.x + p.w &&
+        this.x + this.w > p.x
+      ) {
+        // Odbicie
+        if (this.vx > 0 && this.x + this.w - this.vx <= p.x) {
+          this.x = p.x - this.w;
+        } else if (this.vx < 0 && this.x - this.vx >= p.x + p.w) {
+          this.x = p.x + p.w;
+        }
+      }
+    }
+
+    // Granice mapy
+    if (this.x < 0) {
+      this.x = 0;
+      this.vx = 0;
+    }
+    if (this.y > canvas.height + 20) {
+      // Upadnek
+      this.die();
+    }
+  }
+
+  draw(ctx) {
+    ctx.fillStyle = '#d50000'; // Czerwień
+    ctx.fillRect(this.x, this.y, this.w, this.h);
+
+    // Czapka
+    ctx.fillStyle = '#ff1a00';
+    ctx.fillRect(this.x + 4, this.y, this.w - 8, 10);
+
+    // Uszy Pegazowe 🦄
+    if (this.isFlying || !this.grounded) {
+      ctx.fillStyle = '#ffd700'; // złote
+      const angle = Math.sin(Date.now() / 150) * 3;
+      ctx.save();
+      ctx.translate(this.x + this.w / 2, this.y);
+      ctx.rotate(angle * Math.PI / 180);
+      ctx.fillRect(this.w / 2 + 4, -this.h, 6, this.h - 8);
+      ctx.fillRect(this.w / 2 - 10, -this.h, 6, this.h - 8);
+      ctx.restore();
+    }
+
+    // Okulary / ciało
+    ctx.fillStyle = '#4a8b2d'; // Zielone ogrodniczki
+    ctx.fillRect(this.x + 4, this.y + this.h - 18, this.w - 8, 12);
+
+    // Twarz
+    ctx.fillStyle = '#ffccaa'; // Skóra
+    ctx.fillRect(this.x + 10, this.y + 8, 6, 4);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(this.x + 13, this.y + 8, 2, 4);
+
+    // Pasek paliwa Pegaza
+    ctx.fillStyle = '#555';
+    ctx.fillRect(this.x, this.y - 8, this.w, 4);
+    if (this.isFlying) {
+      ctx.fillStyle = '#ffff00';
+      ctx.fillRect(this.x, this.y - 8, (this.fuel / 30) * this.w, 4);
+    }
+  }
+
+  die() {
+    gameState.lives--;
+    if (gameState.lives <= 0) {
+      sfx.gameover();
+      gameState.state = GAME_STATE_OVER;
+    } else {
+      this.respawn();
+    }
+  }
+
+  respawn() {
+    this.x = 100;
+    this.y = canvas.height - 250;
+    this.vx = 0;
+    this.vy = 0;
+    this.fuel = 30;
+  }
+}
+
+class Enemy {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.w = 32;
+    this.h = 32;
+    this.vx = -1.5;
+    this.vy = 0;
+    this.dead = false;
+    this.squashed = false;
+  }
+
+  update() {
+    if (this.dead) return;
+
+    this.vy += 0.6;
+    this.x += this.vx;
+    this.y += this.vy;
+
+    // Kolizja z ziemią
+    if (this.y > canvas.height - 64) {
+      this.y = canvas.height - 64;
+      this.vy = 0;
+    }
+  }
+
+  draw(ctx) {
+    if (this.dead && this.squashed) return;
+
+    ctx.fillStyle = '#8b4513'; // Goomba (brązowy grzyb)
+    ctx.fillRect(this.x, this.y + 4, this.w - 2, this.h - 8);
+    ctx.fillRect(this.x + 4, this.y, this.w - 10, 8);
+
+    // Oczy
+    ctx.fillStyle = 'white';
+    ctx.fillRect(this.x + 6, this.y + 10, 6, 8);
+    ctx.fillRect(this.x + 20, this.y + 10, 6, 8);
+
+    if (!this.squashed) {
+      ctx.fillStyle = 'black';
+      ctx.fillRect(this.x + 8, this.y + 12, 3, 4);
+      ctx.fillRect(this.x + 22, this.y + 12, 3, 4);
+    } else {
+      // Efekt spłaszczenia
+      ctx.fillStyle = '#4b360e';
+      ctx.fillRect(this.x, this.y + 18, this.w, 14);
+    }
+  }
+
+  squash() {
+    if (!this.dead && !this.squashed) {
+      this.squashed = true;
+      sfx.stomp();
+    }
+  }
+}
+
+class Coin {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.w = 16;
+    this.h = 20;
+    this.collected = false;
+    this.animOffset = Math.random() * 10;
+  }
+
+  draw(ctx) {
+    if (this.collected) return;
+
+    const offset = Math.sin(Date.now() / 200 + this.animOffset) * 3;
+    ctx.fillStyle = '#ffd700'; // złoty
+    ctx.fillRect(this.x + 4, this.y - offset, this.w, this.h);
+    ctx.fillStyle = '#ffd700';
+    ctx.fillRect(this.x + 8, this.y - offset, 2, this.h);
+
+    // Obrót
+    ctx.fillStyle = '#ffec8b';
+    ctx.fillRect(this.x + 7, this.y - offset + 6, 1, 8);
+    ctx.fillRect(this.x + 5, this.y - offset + 4, 2, 1);
+    ctx.fillRect(this.x + 9, this.y - offset + 4, 2, 1);
+  }
+}
+
+/* -------------------------
+   🗺️ POZIOM I OBIEKTY
+   ------------------------- */
+let hero;
+let platforms = [];
+let enemies = [];
+let coins = [];
+
+function buildLevel() {
+  platforms = [
+    // Ziemia
+    new Platform(0, canvas.height - 64, 1200, 64, 'ground'),
+    // Bloki i rury
+    new Platform(300, canvas.height - 160, 48, 96, 'pipe'),
+    new Platform(500, canvas.height - 200, 48, 96, 'pipe'),
+    new Platform(750, canvas.height - 240, 160, 32, 'brick'),
+    new Platform(950, canvas.height - 160, 48, 96, 'pipe'),
+    new Platform(1200, canvas.height - 320, 48, 96, 'pipe'),
+    new Platform(1500, canvas.height - 320, 48, 96, 'pipe'),
+    // Platformy
+    new Platform(1700, canvas.height - 250, 48, 48, 'brick'),
+    new Platform(1900, canvas.height - 250, 48, 48, 'brick'),
+    new Platform(1960, canvas.height - 250, 48, 48, 'brick'),
+    new Platform(1960, canvas.height - 320, 48, 48, 'brick'),
+    new Platform(2100, canvas.height - 350, 48, 48, 'brick'),
+    new Platform(2160, canvas.height - 350, 48, 48, 'brick'),
+    new Platform(2220, canvas.height - 350, 48, 48, 'brick'),
+    // Ostatnia platforma
+    new Platform(2600, canvas.height - 160, 800, 64, 'brick'),
+    // Koniec mapy
+    new Platform(3200, canvas.height - 64, 600, 64, 'ground')
+  ];
+
+  enemies = [
+    new Enemy(500, canvas.height - 64 - 32),
+    new Enemy(900, canvas.height - 64 - 32),
+    new Enemy(1550, canvas.height - 64 - 32),
+    new Enemy(2300, canvas.height - 350 - 32),
+    new Enemy(2700, canvas.height - 64 - 32)
+  ];
+
+  coins = [
+    new Coin(780, canvas.height - 280),
+    new Coin(780 + 50, canvas.height - 280),
+    new Coin(780 + 100, canvas.height - 280),
+    new Coin(780 + 150, canvas.height - 280),
+    new Coin(970, canvas.height - 160 - 32),
+    new Coin(1450, canvas.height - 64 - 32),
+    new Coin(1850, canvas.height - 64 - 32),
+    new Coin(1930, canvas.height - 250 - 48),
+    new Coin(1930, canvas.height - 250 - 48),
+    new Coin(2130, canvas.height - 350 - 48),
+    new Coin(2190, canvas.height - 350 - 48),
+    new Coin(2250, canvas.height - 350 - 48)
+  ];
+
+  hero = new Mario();
+}
+
+function drawBrick(ctx, x, y) {
+  ctx.fillStyle = '#b7382e';
+  ctx.fillRect(x, y, 40, 32);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(x + 1, y + 32, 38, 1);
+  ctx.fillRect(x + 19, y, 1, 32);
+}
+
+function drawPipe(ctx, x, canvasHeight, pipeHeight) {
+  // Rura
+  const y = canvasHeight - pipeHeight;
+  ctx.fillStyle = '#368b2d';
+  ctx.fillRect(x, y, 48, pipeHeight);
+  // Krawędź
+  ctx.fillStyle = '#235e1d';
+  ctx.fillRect(x + 40, y, 8, pipeHeight);
+  // Góra rury
+  ctx.fillStyle = '#368b2d';
+  ctx.fillRect(x - 4, y - 20, 56, 20);
+}
+
+function startGame() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  sfx.music();
+
+  buildLevel();
+  gameState.lives = 3;
+  gameState.score = 0;
+  gameState.cameraX = 0;
+  gameState.state = GAME_STATE_PLAYING;
+
+  if (!gameState.running) {
+    gameState.running = true;
+    requestAnimationFrame(gameLoop);
+  }
+}
+
+function resetGame() {
+  startGame();
+}
+
+/* -------------------------
+   🎮 GŁÓWNA PĘTLA
+   ------------------------- */
+function gameLoop(timestamp) {
+  if (!gameState.running || gameState.state === GAME_STATE_START) return;
+
+  if (Date.now() - lastTime > 1000 / FPS) {
+    lastTime = Date.now();
+
+    // Clear
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Niebo
+    const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    skyGradient.addColorStop(0, '#5c94fc');
+    skyGradient.addColorStop(1, '#a1cbf3');
+    ctx.fillStyle = skyGradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Chmurki
+    ctx.fillStyle = 'white';
+    for (let i = 0; i < 5; ++i) {
+      const cx = ((i * 240 + Date.now() / 15) % (canvas.width + 200)) - 100;
+      const cy = 50 + (i % 2) * 30;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 30 + i * 5, 0, Math.PI * 2);
+      ctx.arc(cx + 25, cy - 10, 35, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Pozycja kamery (śledzenie bohatera)
+    gameState.cameraX = hero.x - 200;
+    if (gameState.cameraX < 0) gameState.cameraX = 0;
+    if (gameState.cameraX > 3200 - canvas.width) gameState.cameraX = 3200 - canvas.width;
+
+    // Obiekty
+    platforms.forEach(p => {
+      if (p.x + gameState.cameraX > -50 && p.x < canvas.width) {
+        if (p.type === 'pipe') drawPipe(ctx, p.x - gameState.cameraX, canvas.height, 96);
+        else if (p.type === 'brick') drawBrick(ctx, p.x - gameState.cameraX, p.y);
+        else p.draw(ctx); // ground
+      }
+    });
+
+    coins.forEach(c => c.draw(ctx));
+
+    enemies.forEach(e => {
+      e.update();
+      if (e.x - gameState.cameraX > -40 && e.x < canvas.width + 40) {
+        e.draw(ctx);
+      }
+    });
+
+    hero.update(platforms, enemies);
+
+    // Kolizja Mario ↔ enemies
+    enemies.forEach(e => {
+      if (e.dead || e.squashed) return;
+      // Prosta kolizja AABB
+      if (
+        hero.x < e.x + e.w &&
+        hero.x + hero.w > e.x &&
+        hero.y < e.y + e.h &&
+        hero.y + hero.h > e.y
+      ) {
+        // Mario pada na wroga z góry → stomp
+        if (hero.vy > 0 && hero.y + hero.h - hero.vy < e.y + e.h * 0.5) {
+          e.squash();
+          hero.vy = -8;
+          gameState.score += 100;
+        } else {
+          hero.die();
+        }
+      }
+    });
+
+    // Kolizja Mario ↔ coins
+    coins.forEach(c => {
+      if (
+        !c.collected &&
+        hero.x < c.x + c.w &&
+        hero.x + hero.w > c.x &&
+        hero.y < c.y + c.h &&
+        hero.y + hero.h > c.y
+      ) {
+        c.collected = true;
+        gameState.score += 250;
+        sfx.coin();
+      }
+    });
+
+    // Rysowanie Mario
+    hero.draw(ctx);
+
+    // Tekst UI
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px "Courier New"';
+    ctx.fillText(`WYNIK: ${gameState.score}`, 20, 30);
+    ctx.fillText(`ŻYCIA: ${gameState.lives}`, canvas.width - 150, 30);
+    ctx.fillText(`PEGASUS FUEL: ${hero.fuel}/30`, canvas.width / 2 - 100, 30);
+
+    // Game Over?
+    if (gameState.lives <= 0) {
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'red';
+      ctx.font = 'bold 48px "Courier New"';
+      ctx.fillText("KONIEC GRY", canvas.width / 2 - 160, canvas.height / 2);
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 24px "Courier New"';
+      ctx.fillText(`Twój wynik: ${gameState.score}`, canvas.width / 2 - 100, canvas.height / 2 + 50);
+      ctx.fillText("Naciśnij SPACJĘ, aby zagrać ponownie", canvas.width / 2 - 260, canvas.height / 2 + 100);
+      gameState.state = GAME_STATE_OVER;
+    }
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+// Start tła
+function startBackground() {
+  if (gameState.state === GAME_STATE_START) {
+    // Tło
+    ctx.fillStyle = '#5c94fc';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Chmurki
+    ctx.fillStyle = 'white';
+    for (let i = 0; i < 5; ++i) {
+      const cx = ((i * 240 + Date.now() / 15) % (canvas.width + 200)) - 100;
+      const cy = 50 + (i % 2) * 30;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 30 + i * 5, 0, Math.PI * 2);
+      ctx.arc(cx + 25, cy - 10, 35, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Napis startowy
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 36px "Courier New"';
+    const text1 = "MARIO Z PEGASEM";
+    ctx.fillText(text1, canvas.width / 2 - (ctx.measureText(text1).width / 2), 150);
+
+    ctx.fillStyle = '#ffff00';
+    ctx.font = 'bold 24px "Courier New"';
+    const text2 = "Zbieraj monety • Skacz na wrogów";
+    ctx.fillText(text2, canvas.width / 2 - (ctx.measureText(text2).width / 2), 190);
+    const text3 = "Przytrzymaj SPACJĘ dla lotu Pegazowego 🦄";
+    ctx.fillText(text3, canvas.width / 2 - (ctx.measureText(text3).width / 2), 230);
+
+    ctx.fillStyle = '#ff1a00';
+    const text4 = "Wciśnij SPACJĘ, aby zacząć";
+    ctx.fillText(text4, canvas.width / 2 - (ctx.measureText(text4).width / 2), 300);
+
+    requestAnimationFrame(startBackground);
+  }
+}
+
+// Inicjalizacja
+startBackground();
+
+</script>
+</body>
+</html>
+
