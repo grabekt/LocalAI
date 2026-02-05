@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ala Galaxian - Gra HTML</title>
+    <style>
+        body {
+            background-color: #050510;
+            color: white;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        h1 {
+            color: #00ffff;
+            text-shadow: 2px 2px 4px red;
+            margin-bottom: 10px;
+        }
+
+        canvas {
+            border: 4px solid #ffcc00;
+            box-shadow: 0 0 20px rgba(255, 0, 0, 0.4);
+            background-color: #000;
+        }
+
+        .controls {
+            margin-top: 15px;
+            color: #aaa;
+            font-size: 0.9em;
+        }
+
+        .score-board {
+            margin-bottom: 10px;
+            font-size: 1.5em;
+            color: #00ffcc;
+        }
+
+        #gameOverScreen {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            border: 2px solid red;
+            z-index: 10;
+        }
+
+        button {
+            background-color: #ffcc00;
+            color: black;
+            border: none;
+            padding: 10px 20px;
+            font-size: 1.2em;
+            cursor: pointer;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background-color: #ffe680;
+        }
+    </style>
+</head>
+<body>
+
+<h1>ALA GALAXIAN 🔮</h1>
+
+<div class="score-board">Wynik: <span id="score">0</span></div>
+
+<canvas id="gameCanvas" width="600" height="500"></canvas>
+
+<div class="controls">
+    ⬅️ ➡️ poruszanie | Spacja - strzał
+</div>
+
+<div id="gameOverScreen">
+    <h2 style="color: red; font-size: 2em;">KONIEC GRY</h2>
+    <p>Twój wynik: <span id="finalScore">0</span></p>
+    <button onclick="restartGame()">Zagraj ponownie 🚀</button>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Konfiguracja gry
+    const playerSpeed = 5;
+    const bulletSpeed = 7;
+    const enemySpeedBase = 1.5;
+    let enemies = [];
+    let bullets = [];
+    let particles = [];
+    let score = 0;
+    let gameOver = false;
+
+    // Gracz (statek kosmiczny)
+    const player = {
+        x: canvas.width / 2,
+        y: canvas.height - 40,
+        width: 30,
+        height: 30,
+        color: '#00ffff'
+    };
+
+    // Stany klawiszy
+    const keys = {};
+
+    window.addEventListener('keydown', (e) => {
+        keys[e.code] = true;
+        if (e.code === 'Space' && !gameOver) {
+            bullets.push({
+                x: player.x,
+                y: player.y - 10,
+                speed: bulletSpeed
+            });
+        }
+    });
+
+    window.addEventListener('keyup', (e) => {
+        keys[e.code] = false;
+    });
+
+    // Funkcja tworząca wrogów (typ Galaxian)
+    function spawnEnemies() {
+        const rows = 3;
+        const cols = 8;
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                enemies.push({
+                    x: 50 + col * 60,
+                    y: 50 + row * 45,
+                    width: 28,
+                    height: 20,
+                    color: ['#ff4444', '#ff8800', '#ffff00'][row],
+                    dx: enemySpeedBase + (score / 100), // przyśpieszają z czasem
+                    dy: 25 // przeskok w dół po osiągnięciu krawędzi
+                });
+            }
+        }
+    }
+
+    // Tworzenie wybuchów (particles)
+    function createExplosion(x, y, color) {
+        for (let i = 0; i < 12; i++) {
+            particles.push({
+                x: x,
+                y: y,
+                vx: (Math.random() - 0.5) * 6,
+                vy: (Math.random() - 0.5) * 6,
+                life: 25, // trwanie cząsteczki
+                color: color
+            });
+        }
+    }
+
+    // Rysowanie statku gracza
+    function drawPlayer() {
+        ctx.fillStyle = player.color;
+        ctx.beginPath();
+        ctx.moveTo(player.x, player.y);
+        ctx.lineTo(player.x - 12, player.y + 20);
+        ctx.lineTo(player.x, player.y + 15); // sruba
+        ctx.lineTo(player.x + 12, player.y + 20);
+        ctx.closePath();
+        ctx.fill();
+
+        // Dym z silnika
+        if (Math.random() > 0.5) {
+            ctx.fillStyle = '#ffcc00';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y + 22, 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // Rysowanie wrogów (proste "alieny")
+    function drawEnemy(enemy) {
+        ctx.fillStyle = enemy.color;
+        //ciało
+        ctx.beginPath();
+        ctx.arc(enemy.x + enemy.width/2, enemy.y + enemy.height/2 - 3, enemy.width/2, 0, Math.PI * 2);
+        ctx.fill();
+
+        //oko / serce
+        ctx.fillStyle = 'black';
+        ctx.beginPath();
+        ctx.arc(enemy.x + enemy.width/2, enemy.y + enemy.height/2 - 3, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // skrzydła / ramiona (typowe Galaxian)
+        ctx.beginPath();
+        ctx.moveTo(enemy.x, enemy.y + 5);
+        ctx.lineTo(enemy.x - 5, enemy.y + 10);
+        ctx.moveTo(enemy.x + enemy.width, enemy.y + 5);
+        ctx.lineTo(enemy.x + enemy.width + 5, enemy.y + 10);
+        ctx.strokeStyle = enemy.color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+
+    // Rysowanie pocisków
+    function drawBullet() {
+        ctx.fillStyle = '#00ffcc';
+        bullets.forEach(b => {
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    }
+
+    // Rysowanie wybuchów
+    function drawParticles() {
+        particles.forEach(p => {
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    }
+
+    // Główna pętla gry
+    function update() {
+        if (gameOver) return;
+
+        // Ruch gracza
+        if ((keys['ArrowLeft'] || keys['KeyA']) && player.x > 20) {
+            player.x -= playerSpeed;
+        }
+        if ((keys['ArrowRight'] || keys['KeyD']) && player.x < canvas.width - 20) {
+            player.x += playerSpeed;
+        }
+
+        // Pociski
+        for (let i = bullets.length - 1; i >= 0; i--) {
+            let b = bullets[i];
+            b.y -= bulletSpeed;
+
+            if (b.y < 0) {
+                bullets.splice(i, 1);
+                continue;
+            }
+
+            // Kolizje pocisków z wrogami
+            for (let j = enemies.length - 1; j >= 0; j--) {
+                let e = enemies[j];
+                if (
+                    b.x > e.x && 
+                    b.x < e.x + e.width &&
+                    b.y > e.y && 
+                    b.y < e.y + e.height
+                ) {
+                    // Trafienie!
+                    createExplosion(e.x + e.width/2, e.y + e.height/2, e.color);
+                    enemies.splice(j, 1); // usuń wroga
+                    bullets.splice(i, 1); // usuń pocisk
+                    score += 10;
+                    document.getElementById('score').innerText = score;
+                    break; // jeden pocisk niszczy tylko jednego wroga
+                }
+            }
+        }
+
+        // Wrogowie (algorytm podobny do Galaxian: przesuwają się w lewo/prawo, then spadają)
+        let hitEdge = false;
+        enemies.forEach(enemy => {
+            enemy.x += enemy.dx;
+            if (enemy.x <= 10 || enemy.x + enemy.width >= canvas.width - 10) {
+                hitEdge = true;
+            }
+        });
+
+        if (hitEdge) {
+            enemies.forEach(enemy => {
+                enemy.dx *= -1;
+                enemy.y += enemy.dy; // przeskok w dół
+            });
+        }
+
+        // Usuń wrogów, którzy wylądują na dole
+        enemies = enemies.filter(e => e.y < canvas.height);
+
+        // Kolizja gracza z wrogami
+        enemies.forEach(e => {
+            const dist = Math.hypot(player.x - (e.x + e.width/2), player.y - (e.y + e.height/2));
+            if (dist < 20) {
+                gameOver = true;
+                document.getElementById('finalScore').innerText = score;
+                document.getElementById('gameOverScreen').style.display = 'block';
+            }
+        });
+
+        // Jeśli wszystkich wrogów nie ma, nowa fala
+        if (enemies.length === 0) {
+            spawnEnemies();
+        }
+
+        // Particles
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life--;
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+    }
+
+    function draw() {
+        // Czyszczenie ekranu z "ogonem" dla efektu ruchu
+        ctx.fillStyle = 'rgba(0, 5, 16, 0.3)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        drawPlayer();
+        drawEnemyList();
+        drawBullet();
+        drawParticles();
+    }
+
+    function drawEnemyList() {
+        enemies.forEach(drawEnemy);
+    }
+
+    // Główna pętla
+    function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    // Restart
+    function restartGame() {
+        document.getElementById('gameOverScreen').style.display = 'none';
+        bullets = [];
+        particles = [];
+        enemies = [];
+        score = 0;
+        document.getElementById('score').innerText = '0';
+        gameOver = false;
+
+        player.x = canvas.width / 2;
+        spawnEnemies();
+    }
+
+    // Start gry
+    spawnEnemies();
+    gameLoop();
+
+</script>
+
+</body>
+</html>
+
