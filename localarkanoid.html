@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <title>Arkanoid: Pegasus Edition</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <style>
+    /* 🔮 PEGASUS THEME STYLING */
+    :root {
+      --bg-color: #0a0a12;
+      --neon-blue: #00eaff;
+      --neon-purple: #b827fc;
+      --neon-gold: #ffd700;
+      --text-color: #e0f0ff;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: radial-gradient(circle at center, #131324 0%, #0a0a12 75%);
+      color: var(--text-color);
+      font-family: 'Segoe UI', 'Orbitron', sans-serif;
+      overflow: hidden;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #game-container {
+      position: relative;
+      width: 100%;
+      max-width: 800px;
+      height: 600px;
+      border: 4px solid var(--neon-blue);
+      box-shadow: 
+        0 0 20px rgba(0, 234, 255, 0.6),
+        inset 0 0 30px rgba(184, 39, 252, 0.2);
+      background: radial-gradient(circle at top left, #1a1a2e, #000);
+      overflow: hidden;
+    }
+
+    /* Tło z efektem „gwiazd” */
+    #background-stars {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background-image: 
+        radial-gradient(white, rgba(255,255,255,.2) 2px, transparent 3px),
+        radial-gradient(white, rgba(255,255,255,.15) 1px, transparent 2px);
+      background-size: 550px 550px, 350px 350px;
+      background-position: 0 0, 40px 60px;
+      opacity: 0.5;
+    }
+
+    /* Napisy nad grą */
+    header {
+      position: absolute;
+      top: 10px; left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+    }
+
+    h1 {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 2.5rem;
+      color: var(--neon-purple);
+      text-shadow:
+        0 0 5px var(--neon-blue),
+        0 0 10px var(--neon-purple),
+        0 0 20px var(--neon-blue);
+      letter-spacing: 3px;
+    }
+
+    .game-ui {
+      position: absolute;
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 25px;
+      font-size: 1.2rem;
+    }
+
+    #score { color: var(--neon-gold); text-shadow: 0 0 10px rgba(255, 215, 0, 0.8); }
+    #lives { color: var(--neon-blue); text-shadow: 0 0 10px rgba(0, 234, 255, 0.8); }
+
+    canvas {
+      display: block;
+    }
+
+    /* Menu startowe / Game Over */
+    #menu-overlay {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(10, 10, 18, 0.92);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 10;
+    }
+
+    .btn {
+      background: linear-gradient(45deg, #b827fc, #00eaff);
+      color: white;
+      border: none;
+      padding: 15px 40px;
+      font-size: 1.5rem;
+      font-family: 'Orbitron', sans-serif;
+      letter-spacing: 2px;
+      border-radius: 50px;
+      cursor: pointer;
+      box-shadow:
+        0 0 20px rgba(184, 39, 252, 0.6),
+        inset 0 0 10px rgba(255, 239, 255, 0.4);
+      transition: transform 0.1s, box-shadow 0.3s;
+    }
+
+    .btn:hover {
+      transform: scale(1.05);
+      box-shadow:
+        0 0 30px rgba(184, 39, 252, 0.9),
+        inset 0 0 15px rgba(255, 239, 255, 0.6);
+    }
+
+    .hidden { display: none !important; }
+
+    /* Efekt „przesunięcia scanline” dla retro feel */
+    .scanline {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.2));
+      background-size: 100% 4px;
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    #final-message {
+      font-size: 2.8rem;
+      color: var(--neon-gold);
+      text-shadow:
+        0 0 10px var(--neon-blue),
+        0 0 30px var(--neon-purple);
+      margin-bottom: 20px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<div id="game-container">
+  <div id="background-stars"></div>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+  <!-- HUD -->
+  <header>
+    <h1>PEGASUS BRICK BREAKER</h1>
+  </header>
+
+  <div class="game-ui">
+    <div id="score">WYNIK: 0</div>
+    <div id="lives">ŻYCIA: ❤️❤️❤️</div>
+  </div>
+
+  <!-- Efekt scanline -->
+  <div class="scanline"></div>
+
+  <!-- Menu startowe / Game Over -->
+  <div id="menu-overlay">
+    <div id="final-message">PRZYGOTUJ SIĘ DO LOTU 🚀</div>
+    <button class="btn" id="start-btn">START</button>
+  </div>
+</div>
+
+<script>
+/**
+ * Arkanoid: Pegasus Edition
+ * Prosta gra w Canvas API
+ */
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const startBtn = document.getElementById('start-btn');
+const menuOverlay = document.getElementById('menu-overlay');
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+
+// --- KONFIGURACJA ---
+const PADDLE_WIDTH = 100;
+const PADDLE_HEIGHT = 18;
+const BALL_RADIUS = 9;
+const BRICK_ROW_COUNT = 7;
+const BRICK_COLUMN_COUNT = 8;
+const BRICK_PADDING = 10;
+const BRICK_OFFSET_TOP = 70;
+const BRICK_OFFSET_LEFT = 35;
+
+// Kolory (pegiński styl)
+const COLORS = {
+  row1: '#00eaff', // neon blue
+  row2: '#b827fc', // neon purple
+  row3: '#ffd700', // gold
+  row4: '#ff5e9d', // pinkish
+  row5: '#3ad140', // neon green
+  row6: '#ff8a5c', // orange
+  row7: '#ffffff'
+};
+
+let gameState = {
+  running: false,
+  score: 0,
+  lives: 3,
+  level: 1
+};
+
+let keys = {};
+let particles = [];
+
+// Obiekty gry
+const paddle = {
+  x: canvas.width / 2 - PADDLE_WIDTH / 2,
+  y: canvas.height - 30,
+  width: PADDLE_WIDTH,
+  height: PADDLE_HEIGHT,
+  dx: 7
+};
+
+let ball = {
+  x: canvas.width / 2,
+  y: canvas.height - 50,
+  dx: 4 * (Math.random() > 0.5 ? 1 : -1),
+  dy: -4,
+  radius: BALL_RADIUS,
+  speedBase: 5
+};
+
+let bricks = [];
+
+// --- FUNKCJE POMOCNICZE ---
+
+function initBricks() {
+  bricks = [];
+  const brickWidth = (canvas.width - BRICK_OFFSET_LEFT * 2) / BRICK_COLUMN_COUNT;
+  const brickHeight = 30;
+
+  for (let c = 0; c < BRICK_COLUMN_COUNT; c++) {
+    for (let r = 0; r < BRICK_ROW_COUNT; r++) {
+      const brickX = (c * (brickWidth + BRICK_PADDING)) + BRICK_OFFSET_LEFT;
+      const brickY = (r * (brickHeight + BRICK_PADDING)) + BRICK_OFFSET_TOP;
+      let color;
+
+      if (r < 2) color = COLORS.row1;
+      else if (r < 3) color = COLORS.row2;
+      else if (r < 4) color = COLORS.row3;
+      else if (r < 5) color = COLORS.row4;
+      else if (r < 6) color = COLORS.row5;
+      else if (r === 6) color = COLORS.row6;
+      else color = COLORS.row7;
+
+      bricks.push({
+        x: brickX,
+        y: brickY,
+        w: brickWidth,
+        h: brickHeight,
+        status: 1,
+        color: color
+      });
+    }
+  }
+}
+
+function drawRect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.shadowBlur = 15;
+  ctx.shadowColor = color;
+  ctx.fillRect(x, y, w, h);
+  ctx.shadowBlur = 0; // reset
+}
+
+function drawCircle(x, y, r, color) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = color;
+  ctx.fill();
+  ctx.closePath();
+  ctx.shadowBlur = 0;
+}
+
+function drawParticles() {
+  particles.forEach((p, i) => {
+    p.x += p.dx;
+    p.y += p.dy;
+    p.alpha -= 0.02;
+
+    if (p.alpha <= 0) {
+      particles.splice(i, 1);
+    } else {
+      ctx.globalAlpha = p.alpha;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  });
+}
+
+function createExplosion(x, y, color) {
+  for (let i = 0; i < 15; i++) {
+    particles.push({
+      x: x,
+      y: y,
+      dx: (Math.random() - 0.5) * 8,
+      dy: (Math.random() - 0.5) * 8,
+      radius: Math.random() * 3 + 1,
+      color: color,
+      alpha: 1
+    });
+  }
+}
+
+function drawBricks() {
+  bricks.forEach(b => {
+    if (b.status === 1) {
+      drawRect(b.x, b.y, b.w, b.h, b.color);
+    }
+  });
+}
+
+function updatePaddle() {
+  if (keys['ArrowRight']) paddle.x += paddle.dx;
+  if (keys['ArrowLeft']) paddle.x -= paddle.dx;
+
+  // Ograniczenia
+  if (paddle.x < 0) paddle.x = 0;
+  if (paddle.x + paddle.width > canvas.width) paddle.x = canvas.width - paddle.width;
+}
+
+function updateBall() {
+  ball.x += ball.dx;
+  ball.y += ball.dy;
+
+  // Kolizja ze ścianami bocznymi
+  if (ball.x + ball.radius > canvas.width || ball.x - ball.radius < 0) {
+    ball.dx = -ball.dx;
+    createExplosion(ball.x, ball.y, COLORS.row1);
+  }
+
+  // Kolizja z górną krawędzią
+  if (ball.y - ball.radius < 0) {
+    ball.dy = -ball.dy;
+    createExplosion(ball.x, ball.y, COLORS.row3);
+  }
+
+  // Kolizja z paletką
+  if (
+    ball.y + ball.radius > paddle.y &&
+    ball.x > paddle.x &&
+    ball.x < paddle.x + paddle.width
+  ) {
+    // Oblicz kąt odbicia (im dalej od środka, tym ostrzej)
+    let collidePoint = ball.x - (paddle.x + paddle.width / 2);
+    collidePoint = collidePoint / (paddle.width / 2);
+
+    let angle = collidePoint * (Math.PI / 3); // maks. ±60 stopni
+
+    ball.dx = ball.speedBase * Math.sin(angle);
+    ball.dy = -ball.speedBase * Math.cos(angle);
+
+    // Przyspiesz w miarę gry
+    if (gameState.score % 50 === 0) {
+      ball.dx *= 1.1;
+      ball.dy *= 1.1;
+    }
+
+    createExplosion(ball.x, paddle.y, COLORS.row6);
+  }
+
+  // Kolizja z cegłami
+  bricks.forEach(b => {
+    if (b.status === 1) {
+      if (
+        ball.x > b.x &&
+        ball.x < b.x + b.w &&
+        ball.y > b.y &&
+        ball.y < b.y + b.h
+      ) {
+        ball.dy = -ball.dy;
+        b.status = 0;
+        gameState.score += 10;
+
+        // Efekt wybuchu przy usunięciu cegły
+        createExplosion(b.x + b.w/2, b.y + b.h/2, b.color);
+      }
+    }
+  });
+
+  // Kolizja z dnem (strata życia)
+  if (ball.y + ball.radius > canvas.height) {
+    gameState.lives--;
+    createExplosion(ball.x, canvas.height - 10, COLORS.row2);
+    
+    if (gameState.lives <= 0) {
+      gameOver();
+    } else {
+      resetBall();
+    }
+  }
+
+  // Wygrałeś?
+  if (bricks.every(b => b.status === 0)) {
+    levelUp();
+  }
+}
+
+function resetBall() {
+  ball.x = canvas.width / 2;
+  ball.y = canvas.height - 50;
+  // losowy kierunek startowy
+  ball.dx = 4 * (Math.random() > 0.5 ? 1 : -1);
+  ball.dy = -4;
+}
+
+function levelUp() {
+  // Zwiększ poziom trudności
+  gameState.level++;
+  ball.speedBase += 1;
+  initBricks();
+  
+  // Pokaż na chwilę komunikat
+  const msg = document.createElement("div");
+  msg.textContent = `POZIOM ${gameState.level} ROZPOCZĘTY 🚀`;
+  msg.style.position = 'absolute';
+  msg.style.top = '40%';
+  msg.style.left = '50%';
+  msg.style.transform = 'translate(-50%, -50%)';
+  msg.style.color = COLORS.row7;
+  msg.style.fontSize = '3rem';
+  msg.style.fontFamily = "'Orbitron', sans-serif";
+  msg.style.textShadow = '0 0 20px #ffd700';
+  document.getElementById('game-container').appendChild(msg);
+  
+  setTimeout(() => {
+    if (msg.parentNode) msg.remove();
+  }, 2000);
+}
+
+function gameOver() {
+  gameState.running = false;
+  document.getElementById('final-message').textContent = `KONIEC GRY — TWÓJ WYNIK: ${gameState.score}`;
+  startBtn.textContent = "ZAGRAJ PONOWNIE";
+  menuOverlay.classList.remove('hidden');
+}
+
+function draw() {
+  // Tło
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  drawBricks();
+  drawRect(paddle.x, paddle.y, paddle.width, paddle.height, COLORS.row3);
+  drawCircle(ball.x, ball.y, ball.radius, COLORS.row1);
+  drawParticles();
+
+  // Aktualizuj UI
+  scoreEl.textContent = `WYNIK: ${gameState.score}`;
+  livesEl.textContent = "ŻYCIA: " + "❤️".repeat(gameState.lives);
+}
+
+function gameLoop() {
+  if (!gameState.running) return;
+
+  updatePaddle();
+  updateBall();
+  draw();
+
+  requestAnimationFrame(gameLoop);
+}
+
+function startGame() {
+  gameState.score = 0;
+  gameState.lives = 3;
+  gameState.level = 1;
+  ball.speedBase = 5;
+  
+  initBricks();
+  resetBall();
+
+  gameState.running = true;
+  menuOverlay.classList.add('hidden');
+  
+  gameLoop();
+}
+
+// --- OBSŁUGA KLAWIATURY ---
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    keys[e.key] = true;
+  }
+});
+
+document.addEventListener('keyup', (e) => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    keys[e.key] = false;
+  }
+});
+
+// Obsługa myszy/touch
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  
+  paddle.x = mouseX - PADDLE_WIDTH / 2;
+
+  // Ograniczenia
+  if (paddle.x < 0) paddle.x = 0;
+  if (paddle.x + PADDLE_WIDTH > canvas.width) paddle.x = canvas.width - PADDLE_WIDTH;
+});
+
+// Start przycisku
+startBtn.addEventListener('click', startGame);
+
+// Inicjalizacja początkowa
+initBricks();
+draw(); // narysuj pierwszą klatkę (menu)
+</script>
+</body>
+</html>
+
